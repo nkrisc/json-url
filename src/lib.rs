@@ -2,29 +2,40 @@ extern crate base64;
 extern crate serde;
 
 use lzma;
-use serde_json;
+use serde_json::{error::Category};
 use std::error;
 use std::str;
 use std::fmt::{self, Debug, Display};
+
+#[derive(Debug)]
+pub enum JsonReason {
+    Io,
+    Syntax,
+    Data,
+    Eof
+}
 
 #[derive(Debug)]
 pub enum JURLError {
     DecodingError,
     CompressionError,
     DecompressionError,
-    DeserializationError,
-    SerializationError,
+    JsonError(JsonReason),
     UTF8Error
 }
 
 impl Display for JURLError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
+        match self {
             JURLError::CompressionError => f.write_str("CompressionError"),
             JURLError::DecodingError    => f.write_str("DecodingError"),
             JURLError::DecompressionError => f.write_str("DecompressionError"),
-            JURLError::DeserializationError => f.write_str("DeserializationError"),
-            JURLError::SerializationError => f.write_str("SerializationError"),
+            JURLError::JsonError(field) => match field {
+                JsonReason::Io => f.write_str("JsonError(JsonReason::Io)"),
+                JsonReason::Syntax => f.write_str("JsonError(JsonReason::Syntax)"),
+                JsonReason::Data => f.write_str("JsonError(JsonReason::Data)"),
+                JsonReason::Eof => f.write_str("JsonError(JsonReason::Eof)"),
+            },
             JURLError::UTF8Error => f.write_str("UTF8Error")
         }
     }
@@ -32,12 +43,16 @@ impl Display for JURLError {
 
 impl error::Error for JURLError {
     fn description(&self) -> &str {
-        match *self {
+        match self {
             JURLError::CompressionError => "Could not compress data",
             JURLError::DecodingError => "Could not decode data",
             JURLError::DecompressionError => "Could not decompress data",
-            JURLError::DeserializationError => "Could not deserialize data",
-            JURLError::SerializationError => "Could not serialize data",
+            JURLError::JsonError(field) => match field {
+                JsonReason::Io => "Failure to read or write bytes on an IO stream.",
+                JsonReason::Syntax => "Input is not syntactically valid JSON.",
+                JsonReason::Data => "Input data is semantically incorrect.",
+                JsonReason::Eof => "Unexcpected end of input data.",
+            },
             JURLError::UTF8Error => "Could not decode data as UTF8",
         }    
     }
@@ -66,9 +81,10 @@ impl From<std::str::Utf8Error> for JURLError {
 impl From<serde_json::error::Error> for JURLError {
     fn from (e: serde_json::error::Error) -> Self {
         match e.classify() {
-            //This is completely wrong. Make single error
-            //type for json error and match on classify JURLError::JSON(Type)
-            _ => JURLError::SerializationError
+            Category::Io => JURLError::JsonError(JsonReason::Io),
+            Category::Syntax => JURLError::JsonError(JsonReason::Syntax),
+            Category::Data => JURLError::JsonError(JsonReason::Data),
+            Category::Eof => JURLError::JsonError(JsonReason::Eof),
         }
     }
 }
@@ -89,6 +105,6 @@ where for <'de> T: serde::Deserialize<'de>
     let json_string = str::from_utf8(decompressed.as_slice())?;
     match serde_json::from_str::<T>(json_string) {
         Ok(parsed) => Ok(parsed),
-        Err(_) => Err(JURLError::DeserializationError)
+        Err(e) => Err(JURLError::from(e))
     }
 }
